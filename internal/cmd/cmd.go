@@ -97,28 +97,27 @@ func (a App) ListRunningSessions() error {
 	return nil
 }
 
-func (a App) Start(projects []string, show bool) error {
-	if len(projects) == 0 {
+func (a App) Start(names []string, show bool) error {
+	if len(names) == 0 {
 		return errors.New("usage: amber start [--show] <project names...>")
 	}
-	if show && len(projects) != 1 {
+	if show && len(names) != 1 {
 		return errors.New("--show requires exactly one project")
 	}
 
-	loaded, err := a.loadProjects(projects)
+	projects, err := a.loadProjects(names)
 	if err != nil {
 		return err
 	}
-	client := a.rex()
-	lifecycle := manager.New(client, manager.NewDefaultShell(a.logger))
+	lifecycle := a.manager()
 	var sessionID string
-	for index, cfg := range loaded {
-		if sessionID, err = lifecycle.Start(context.Background(), projects[index], cfg); err != nil {
-			return fmt.Errorf("start project %q: %w", projects[index], err)
+	for _, project := range projects {
+		if sessionID, err = lifecycle.Start(context.Background(), project.name, project.cfg); err != nil {
+			return fmt.Errorf("start project %q: %w", project.name, err)
 		}
 	}
 	if show {
-		return client.SelectSession(context.Background(), sessionID)
+		return a.rex().SelectSession(context.Background(), sessionID)
 	}
 	return nil
 }
@@ -135,57 +134,66 @@ func (a App) Show(name string) error {
 	return client.SelectSession(context.Background(), session.ID)
 }
 
-func (a App) Stop(projects []string) error {
-	if len(projects) == 0 {
+func (a App) Stop(names []string) error {
+	if len(names) == 0 {
 		return errors.New("usage: amber stop <project names...>")
 	}
 
-	loaded, err := a.loadProjects(projects)
+	projects, err := a.loadProjects(names)
 	if err != nil {
 		return err
 	}
-	lifecycle := manager.New(a.rex(), manager.NewDefaultShell(a.logger))
-	for index, cfg := range loaded {
-		if err := lifecycle.Stop(context.Background(), projects[index], cfg); err != nil {
-			return fmt.Errorf("stop project %q: %w", projects[index], err)
+	lifecycle := a.manager()
+	for _, project := range projects {
+		if err := lifecycle.Stop(context.Background(), project.name, project.cfg); err != nil {
+			return fmt.Errorf("stop project %q: %w", project.name, err)
 		}
 	}
 	return nil
+}
+
+func (a App) manager() manager.Manager {
+	return manager.New(a.rex(), manager.NewDefaultShell(a.logger))
+}
+
+type project struct {
+	name string
+	cfg  *config.Config
 }
 
 // loadProjects validates every project before any of them is started or
 // stopped. Configs are always read locally. With --server, panes run on that
 // server but hooks would still run here, so hooks are rejected until amber
 // can run them on the server too.
-func (a App) loadProjects(projects []string) ([]*config.Config, error) {
+func (a App) loadProjects(names []string) ([]project, error) {
 	dir, err := projectsDirectory()
 	if err != nil {
 		return nil, fmt.Errorf("resolve projects directory: %w", err)
 	}
 
 	local := a.server == ""
-	configs := make([]*config.Config, 0, len(projects))
+	projects := make([]project, 0, len(names))
 	var invalid []string
-	for _, project := range projects {
-		if !validProjectName(project) {
-			invalid = append(invalid, fmt.Sprintf("%s (invalid project name)", project))
+	for _, name := range names {
+		if !validProjectName(name) {
+			invalid = append(invalid, fmt.Sprintf("%s (invalid project name)", name))
 			continue
 		}
-		cfg, err := config.Load(filepath.Join(dir, project+".yml"), local)
+		cfg, err := config.Load(filepath.Join(dir, name+".yml"), local)
 		if err != nil {
-			invalid = append(invalid, fmt.Sprintf("%s (%v)", project, err))
+			invalid = append(invalid, fmt.Sprintf("%s (%v)", name, err))
 			continue
 		}
 		if !local && cfg.HasHooks() {
-			invalid = append(invalid, fmt.Sprintf("%s (hooks are not supported with --server)", project))
+			invalid = append(invalid, fmt.Sprintf("%s (hooks are not supported with --server)", name))
 			continue
 		}
-		configs = append(configs, cfg)
+		projects = append(projects, project{name: name, cfg: cfg})
 	}
 	if len(invalid) > 0 {
 		return nil, fmt.Errorf("invalid projects: %s", strings.Join(invalid, ", "))
 	}
-	return configs, nil
+	return projects, nil
 }
 
 func validProjectName(name string) bool {
