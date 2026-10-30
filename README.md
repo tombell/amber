@@ -1,6 +1,6 @@
 # Amber
 
-Amber starts and stops [Rex](https://www.superlogical.com/rex/) sessions from YAML files. Each `~/.config/amber/<name>.yml` describes one session: its windows, how their panes split, what runs in each pane, and hooks to run around start and stop.
+Amber manages [Rex](https://www.superlogical.com/rex/) sessions from YAML files. Describe a project's windows, pane splits, startup commands, and start/stop hooks in `~/.config/amber/<name>.yml`, then bring the whole layout up with `amber start <name>` and tear it down with `amber stop <name>`. Amber checks every config before it touches Rex and creates each session in one request, so a session is built completely or not at all. It works with remote Rex servers too.
 
 ## Install
 
