@@ -184,6 +184,23 @@ func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 	}
 }
 
+func TestLayoutChangesIntoHomePathsFromTheShell(t *testing.T) {
+	cfg := &config.Config{Windows: []config.Window{
+		{Label: "app", Root: "~/Code/it's here", Commands: []string{"make"}},
+		{Label: "home", Root: "~"},
+	}}
+
+	request := Layout("demo", cfg)
+	app := request.Windows[0].Layout.Block.Options
+	if app.Cwd != "" || app.InitialInput != "cd ~/'Code/it'\\''s here'\nmake\n" {
+		t.Errorf("app options = %+v", app)
+	}
+	home := request.Windows[1].Layout.Block.Options
+	if home.Cwd != "" || home.InitialInput != "" {
+		t.Errorf("home options = %+v", home)
+	}
+}
+
 func TestEnvironmentReplacesCallerRexContext(t *testing.T) {
 	env := Environment([]string{"PATH=/bin", "REX_SESSION=mine", "REX_BLOCK=mine", "REX_SERVER=studio"}, "demo", "session:new")
 	want := []string{"PATH=/bin", "REX_SERVER=studio", "AMBER_PROJECT=demo", "REX_SESSION=session:new"}

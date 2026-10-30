@@ -108,14 +108,23 @@ func Layout(project string, cfg *config.Config) rex.CreateSession {
 
 func layoutNode(pane config.Pane) rex.Node {
 	if pane.Split == "" {
+		cwd, commands := pane.Root, pane.Commands
+		// Rex doesn't expand ~ in cwd, and an empty cwd starts in the home
+		// directory, so the shell changes into a path under ~ itself.
+		if strings.HasPrefix(cwd, "~") {
+			if cwd != "~" {
+				commands = append([]string{"cd ~/" + shellQuote(strings.TrimPrefix(cwd, "~/"))}, commands...)
+			}
+			cwd = ""
+		}
 		var input string
-		if len(pane.Commands) > 0 {
-			input = strings.Join(pane.Commands, "\n") + "\n"
+		if len(commands) > 0 {
+			input = strings.Join(commands, "\n") + "\n"
 		}
 		return rex.Node{Block: &rex.Block{
 			Flavor:  rex.TerminalFlavor,
 			Label:   pane.Label,
-			Options: rex.BlockOptions{Cwd: pane.Root, InitialInput: input},
+			Options: rex.BlockOptions{Cwd: cwd, InitialInput: input},
 		}}
 	}
 
@@ -129,6 +138,19 @@ func layoutNode(pane config.Pane) rex.Node {
 		Before:    layoutNode(pane.Panes[0]),
 		After:     layoutNode(pane.Panes[1]),
 	}}
+}
+
+// shellQuote quotes a path so that sh, bash, zsh, and fish all read it the same
+// way. Config loading rejects backslashes, which fish treats as escapes inside
+// single quotes.
+func shellQuote(path string) string {
+	safe := path != "" && strings.IndexFunc(path, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+,:@%", r))
+	}) < 0
+	if safe {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 func (m Manager) runHooks(ctx context.Context, project, sessionID, root string, hooks []string) error {

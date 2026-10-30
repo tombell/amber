@@ -58,8 +58,9 @@ func (c Config) HasHooks() bool {
 
 // Load reads and validates a project config. Local configs expand ~ and resolve
 // a relative project root from the config's directory. Configs for a remote
-// server must use an absolute project root and no ~, because those paths are
-// resolved on another machine.
+// server must use an absolute or ~ project root, because those paths are
+// resolved on another machine. Their ~ paths stay unexpanded, since only the
+// server knows its home directory.
 func Load(name string, local bool) (*Config, error) {
 	path, err := expandHome(name)
 	if err != nil {
@@ -172,8 +173,8 @@ func validateCommands(problems *[]string, path string, commands []string) {
 }
 
 func (c *Config) resolvePaths(resolver pathResolver, configDir string) error {
-	if !resolver.local && !filepath.IsAbs(c.Root) {
-		return errors.New("root must be an absolute path when using --server")
+	if !resolver.local && !filepath.IsAbs(c.Root) && !isHomePath(c.Root) {
+		return errors.New("root must be an absolute or ~ path when using --server")
 	}
 	root, err := resolver.resolve(configDir, c.Root)
 	if err != nil {
@@ -219,20 +220,49 @@ func (r pathResolver) resolve(parent, child string) (string, error) {
 	if child == "" {
 		return filepath.Clean(parent), nil
 	}
-	expanded := child
-	if strings.HasPrefix(child, "~") {
-		if !r.local {
-			return "", fmt.Errorf("home path %q is not supported with --server", child)
-		}
-		var err error
-		if expanded, err = expandHome(child); err != nil {
-			return "", err
-		}
+	if !r.local {
+		return resolveRemote(parent, child)
+	}
+	expanded, err := expandHome(child)
+	if err != nil {
+		return "", err
 	}
 	if filepath.IsAbs(expanded) {
 		return filepath.Clean(expanded), nil
 	}
 	return filepath.Clean(filepath.Join(parent, expanded)), nil
+}
+
+// resolveRemote keeps ~ paths relative to the server's home directory. A path
+// can't climb out of ~, because the server's home could be anywhere.
+func resolveRemote(parent, child string) (string, error) {
+	if strings.HasPrefix(child, "~") && !isHomePath(child) {
+		return "", fmt.Errorf("unsupported home path %q", child)
+	}
+	if filepath.IsAbs(child) {
+		return filepath.Clean(child), nil
+	}
+	if !isHomePath(child) {
+		if !isHomePath(parent) {
+			return filepath.Clean(filepath.Join(parent, child)), nil
+		}
+		child = parent + "/" + child
+	}
+	if strings.Contains(child, `\`) {
+		return "", fmt.Errorf("home path %q must not contain a backslash with --server", child)
+	}
+	rest := filepath.Clean(strings.TrimPrefix(strings.TrimPrefix(child, "~"), "/"))
+	if rest == ".." || strings.HasPrefix(rest, "../") {
+		return "", fmt.Errorf("path %q leaves the home directory", child)
+	}
+	if rest == "." {
+		return "~", nil
+	}
+	return "~/" + rest, nil
+}
+
+func isHomePath(path string) bool {
+	return path == "~" || strings.HasPrefix(path, "~/")
 }
 
 func expandHome(path string) (string, error) {

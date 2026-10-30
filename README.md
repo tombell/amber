@@ -40,7 +40,7 @@ Amber finds a project's session by its label. Rex lets two sessions share a labe
 
 ## Rex servers and apps
 
-`-S`/`--server` takes a host label from `rex hosts` or a server address. Amber passes it to every `rex` command, so the panes start on that server. Amber still reads configs from this machine. The paths in them belong to the server, though, so the project `root` must be absolute and no path can start with `~`. Hooks don't work with `--server` yet. They would run on this machine, which is almost never what you want.
+`-S`/`--server` takes a host label from `rex hosts` or a server address. Amber passes it to every `rex` command, so the panes start on that server. Amber still reads configs from this machine. The paths in them belong to the server, though, so the project `root` must be absolute or start with `~`. Amber doesn't know the server's home directory, so it leaves `~` for the server: a pane under `~` starts in the home directory and types `cd ~/path` before its commands. A path can't use `..` to leave `~`, or contain a backslash. Hooks don't work with `--server` yet. They would run on this machine, which is almost never what you want.
 
 `-C`/`--client` picks which Rex app `show` and `start --show` switch, by a label or ID from `rex client ls`. Without it, Rex uses `REX_CLIENT`, or the app if only one is connected.
 

@@ -98,8 +98,9 @@ func TestLoadForServerRejectsLocalOnlyPaths(t *testing.T) {
 	dir := t.TempDir()
 	tests := map[string]string{
 		"relative project root": "root: Code/demo\nwindows: [{label: a}]\n",
-		"home project root":     "root: ~/Code/demo\nwindows: [{label: a}]\n",
-		"home pane root":        "root: /srv/demo\nwindows: [{label: a, root: ~/logs}]\n",
+		"other user's home":     "root: ~alice/demo\nwindows: [{label: a}]\n",
+		"climbs out of home":    "root: ~/demo\nwindows: [{label: a, root: ../..}]\n",
+		"backslash":             "root: '~/a\\b'\nwindows: [{label: a}]\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -109,14 +110,48 @@ func TestLoadForServerRejectsLocalOnlyPaths(t *testing.T) {
 			}
 		})
 	}
+}
 
-	path := writeConfig(t, dir, "demo.yml", "root: /srv/demo\nwindows: [{label: a, root: app}]\n")
+func TestLoadForServerKeepsHomePathsForTheServer(t *testing.T) {
+	path := writeConfig(t, t.TempDir(), "demo.yml", `
+root: ~/Code/demo
+windows:
+  - label: app
+    root: cmd/../app
+    split: right
+    panes:
+      - root: ..
+      - root: /var/log
+  - label: home
+    root: ~/
+  - label: srv
+    root: /srv/demo
+`)
+
 	cfg, err := Load(path, false)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := cfg.Windows[0].Root; got != "/srv/demo/app" {
-		t.Errorf("window root = %q, want /srv/demo/app", got)
+	roots := map[string]string{
+		"project":   cfg.Root,
+		"app":       cfg.Windows[0].Root,
+		"up pane":   cfg.Windows[0].Panes[0].Root,
+		"logs pane": cfg.Windows[0].Panes[1].Root,
+		"home":      cfg.Windows[1].Root,
+		"srv":       cfg.Windows[2].Root,
+	}
+	want := map[string]string{
+		"project":   "~/Code/demo",
+		"app":       "~/Code/demo/app",
+		"up pane":   "~/Code/demo",
+		"logs pane": "/var/log",
+		"home":      "~",
+		"srv":       "/srv/demo",
+	}
+	for name, got := range roots {
+		if got != want[name] {
+			t.Errorf("%s root = %q, want %q", name, got, want[name])
+		}
 	}
 }
 
