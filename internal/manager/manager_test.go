@@ -159,11 +159,16 @@ func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 	ratio := 0.6
 	cfg := &config.Config{Windows: []config.Window{{
 		Label: "server",
-		Split: config.SplitRight,
-		Ratio: &ratio,
-		Panes: []config.Pane{
-			{Label: "app", Root: "/srv", Commands: []string{"make", "go run ."}},
-			{Split: config.SplitDown, Panes: []config.Pane{{Root: "/a"}, {Root: "/b"}}},
+		Layout: config.Layout{
+			Split: config.SplitRight,
+			Ratio: &ratio,
+			Panes: []config.Pane{
+				{Label: "app", Layout: config.Layout{Root: "/srv", Commands: []string{"make", "go run ."}}},
+				{Layout: config.Layout{Split: config.SplitDown, Panes: []config.Pane{
+					{Layout: config.Layout{Root: "/a"}},
+					{Layout: config.Layout{Root: "/b"}},
+				}}},
+			},
 		},
 	}}}
 
@@ -186,8 +191,8 @@ func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 
 func TestLayoutChangesIntoHomePathsFromTheShell(t *testing.T) {
 	cfg := &config.Config{Windows: []config.Window{
-		{Label: "app", Root: "~/Code/it's here", Commands: []string{"make"}},
-		{Label: "home", Root: "~"},
+		{Label: "app", Layout: config.Layout{Root: "~/Code/it's here", Commands: []string{"make"}}},
+		{Label: "home", Layout: config.Layout{Root: "~"}},
 	}}
 
 	request := Layout("demo", cfg)

@@ -16,30 +16,25 @@ const (
 	SplitDown  = "down"
 )
 
-// Pane is a node in a window's layout. A pane without split is a terminal. A
-// pane with split divides its space between exactly two child panes; ratio is
-// the share given to the first.
-type Pane struct {
-	Label    string   `yaml:"label,omitempty"`
+// Layout places a window's or pane's terminals. A layout without split is one
+// terminal. A layout with split divides its space between exactly two child
+// panes; ratio is the share given to the first.
+type Layout struct {
 	Root     string   `yaml:"root,omitempty"`
 	Commands []string `yaml:"commands,omitempty"`
 	Split    string   `yaml:"split,omitempty"`
 	Ratio    *float64 `yaml:"ratio,omitempty"`
 	Panes    []Pane   `yaml:"panes,omitempty"`
+}
+
+type Pane struct {
+	Label  string `yaml:"label,omitempty"`
+	Layout `yaml:",inline"`
 }
 
 type Window struct {
-	Label    string   `yaml:"label"`
-	Root     string   `yaml:"root,omitempty"`
-	Commands []string `yaml:"commands,omitempty"`
-	Split    string   `yaml:"split,omitempty"`
-	Ratio    *float64 `yaml:"ratio,omitempty"`
-	Panes    []Pane   `yaml:"panes,omitempty"`
-}
-
-// Layout returns the window's root layout node.
-func (w Window) Layout() Pane {
-	return Pane{Root: w.Root, Commands: w.Commands, Split: w.Split, Ratio: w.Ratio, Panes: w.Panes}
+	Label  string `yaml:"label"`
+	Layout `yaml:",inline"`
 }
 
 type Config struct {
@@ -122,7 +117,7 @@ func (c Config) Validate() error {
 		} else {
 			labels[label] = struct{}{}
 		}
-		validatePane(&problems, windowPath, window.Layout())
+		validatePane(&problems, windowPath, Pane{Layout: window.Layout})
 	}
 
 	if len(problems) > 0 {
@@ -183,29 +178,22 @@ func (c *Config) resolvePaths(resolver pathResolver, configDir string) error {
 	c.Root = root
 
 	for wi := range c.Windows {
-		window := &c.Windows[wi]
-		window.Root, err = resolver.resolve(c.Root, window.Root)
-		if err != nil {
-			return fmt.Errorf("windows[%d].root: %w", wi, err)
-		}
-		for pi := range window.Panes {
-			path := fmt.Sprintf("windows[%d].panes[%d]", wi, pi)
-			if err := resolvePane(resolver, window.Root, &window.Panes[pi], path); err != nil {
-				return err
-			}
+		path := fmt.Sprintf("windows[%d]", wi)
+		if err := resolveLayout(resolver, c.Root, &c.Windows[wi].Layout, path); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func resolvePane(resolver pathResolver, parent string, pane *Pane, path string) error {
-	root, err := resolver.resolve(parent, pane.Root)
+func resolveLayout(resolver pathResolver, parent string, layout *Layout, path string) error {
+	root, err := resolver.resolve(parent, layout.Root)
 	if err != nil {
 		return fmt.Errorf("%s.root: %w", path, err)
 	}
-	pane.Root = root
-	for pi := range pane.Panes {
-		if err := resolvePane(resolver, pane.Root, &pane.Panes[pi], fmt.Sprintf("%s.panes[%d]", path, pi)); err != nil {
+	layout.Root = root
+	for pi := range layout.Panes {
+		if err := resolveLayout(resolver, layout.Root, &layout.Panes[pi].Layout, fmt.Sprintf("%s.panes[%d]", path, pi)); err != nil {
 			return err
 		}
 	}

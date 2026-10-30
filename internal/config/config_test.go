@@ -68,9 +68,12 @@ func TestValidateReportsLayoutProblems(t *testing.T) {
 	cfg := Config{
 		Root: "/project",
 		Windows: []Window{
-			{Label: "a", Split: "left", Ratio: &ratio, Commands: []string{"x"}, Panes: []Pane{{}}},
-			{Label: "a", Panes: []Pane{{}, {}}},
-			{Label: "b", Split: "down", Panes: []Pane{{Commands: []string{" "}}, {Label: "x", Split: "right", Panes: []Pane{{}, {}}}}},
+			{Label: "a", Layout: Layout{Split: "left", Ratio: &ratio, Commands: []string{"x"}, Panes: []Pane{{}}}},
+			{Label: "a", Layout: Layout{Panes: []Pane{{}, {}}}},
+			{Label: "b", Layout: Layout{Split: "down", Panes: []Pane{
+				{Layout: Layout{Commands: []string{" "}}},
+				{Label: "x", Layout: Layout{Split: "right", Panes: []Pane{{}, {}}}},
+			}}},
 		},
 	}
 

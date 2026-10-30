@@ -101,7 +101,7 @@ func (m Manager) Stop(ctx context.Context, project string, cfg *config.Config) e
 func Layout(project string, cfg *config.Config) rex.CreateSession {
 	request := rex.CreateSession{Label: project, Windows: make([]rex.Window, len(cfg.Windows))}
 	for i, window := range cfg.Windows {
-		request.Windows[i] = rex.Window{Label: window.Label, Layout: layoutNode(window.Layout())}
+		request.Windows[i] = rex.Window{Label: window.Label, Layout: layoutNode(config.Pane{Layout: window.Layout})}
 	}
 	return request
 }
