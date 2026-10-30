@@ -40,7 +40,11 @@ Amber finds a project's session by its label. Rex lets two sessions share a labe
 
 ## Rex servers and apps
 
-`-S`/`--server` takes a host label from `rex hosts` or a server address. Amber passes it to every `rex` command, so the panes start on that server. Amber still reads configs from this machine. The paths in them belong to the server, though, so the project `root` must be absolute or start with `~`. Amber doesn't know the server's home directory, so it leaves `~` for the server: a pane under `~` starts in the home directory and types `cd ~/path` before its commands. A path can't use `..` to leave `~`, or contain a backslash. Hooks don't work with `--server` yet. They would run on this machine, which is almost never what you want.
+`-S`/`--server` takes a host label from `rex hosts` or a server address. Amber passes it to every `rex` command, so the panes start on that server. Amber still reads configs from this machine. The paths in them belong to the server, though, so the project `root` must be absolute or start with `~`.
+
+Amber can't tell where the server's home directory is, and Rex doesn't expand `~` itself. So a pane whose root is under `~` starts in the home directory, and Amber types `cd ~/path` before its commands. You'll see that `cd` in the pane. A path under `~` can't use `..` to climb out of it, or contain a backslash. If a root doesn't exist on the server, Rex starts the pane in the home directory without an error.
+
+Hooks don't work with `--server` yet. They would run on this machine, which is almost never what you want.
 
 `-C`/`--client` picks which Rex app `show` and `start --show` switch, by a label or ID from `rex client ls`. Without it, Rex uses `REX_CLIENT`, or the app if only one is connected.
 
@@ -102,7 +106,7 @@ Each window holds one pane, and a pane is either a terminal or a split.
 
 Pane labels let you target panes from the CLI, as in `rex capture -b app`. Rex refuses a label that matches more than one pane, so keep them unique within a session if you plan to do that. As far as I can tell, the Rex app doesn't display pane labels anywhere yet.
 
-Each window and pane inherits its parent's root. A relative path resolves from the parent root, an absolute path replaces it, and `~` expands to your home directory.
+Each window and pane inherits its parent's root. A relative path resolves from the parent root, an absolute path replaces it, and `~` is your home directory, or the server's with `--server`.
 
 Rex makes the last window active when it creates a session. Amber focuses the first window afterwards, because that's the one you'd expect from reading the file.
 
