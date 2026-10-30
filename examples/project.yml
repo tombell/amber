@@ -1,0 +1,32 @@
+root: ~/Code/acme
+
+before_start:
+  - mise install
+
+after_start:
+  - rex window rename -s "$REX_SESSION" 1 server
+
+before_stop:
+  - echo "stopping $AMBER_PROJECT"
+
+windows:
+  - label: server
+    root: ./cmd/server
+    split: right
+    ratio: 0.6
+    panes:
+      - label: app
+        commands:
+          - go run .
+      - root: ../../
+        split: down
+        panes:
+          - label: tests
+            commands:
+              - go test ./... -count=1
+          - label: logs
+            commands:
+              - tail -f var/app.log
+  - label: editor
+    commands:
+      - nvim .
