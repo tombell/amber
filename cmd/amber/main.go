@@ -30,11 +30,16 @@ Special options:
   --help                     Show this message, then exit
 `
 
+// errUsage reports a usage error that has already been printed.
+var errUsage = errors.New("usage error")
+
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(2)
-		}
+	err := run(os.Args[1:], os.Stdout, os.Stderr)
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+	case errors.Is(err, errUsage):
+		os.Exit(2)
+	default:
 		log.SetFlags(0)
 		log.Fatal(err)
 	}
@@ -66,7 +71,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	remaining := flags.Args()
 	if len(remaining) == 0 {
 		flags.Usage()
-		return flag.ErrHelp
+		return errUsage
 	}
 
 	var logger *log.Logger
@@ -145,8 +150,14 @@ func targetFlags(flags *flag.FlagSet, server, client *string) {
 	flags.Var(clientFlag, "C", "Rex app label or ID")
 }
 
+// parseFlags parses args. The flag package prints parse errors and usage
+// itself, so they come back as errUsage rather than being printed again.
 func parseFlags(flags *flag.FlagSet, args []string) error {
-	return flags.Parse(args)
+	err := flags.Parse(args)
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
+		return errUsage
+	}
+	return err
 }
 
 // nonEmpty is a string flag that rejects an empty value.
