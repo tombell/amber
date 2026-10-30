@@ -137,24 +137,35 @@ func run(args []string, stdout, stderr io.Writer) error {
 }
 
 func targetFlags(flags *flag.FlagSet, server, client *string) {
-	flags.StringVar(server, "server", *server, "Rex host label or server address")
-	flags.StringVar(server, "S", *server, "Rex host label or server address")
-	flags.StringVar(client, "client", *client, "Rex app label or ID")
-	flags.StringVar(client, "C", *client, "Rex app label or ID")
+	serverFlag := nonEmpty{value: server, name: "host label or address"}
+	clientFlag := nonEmpty{value: client, name: "app label or ID"}
+	flags.Var(serverFlag, "server", "Rex host label or server address")
+	flags.Var(serverFlag, "S", "Rex host label or server address")
+	flags.Var(clientFlag, "client", "Rex app label or ID")
+	flags.Var(clientFlag, "C", "Rex app label or ID")
 }
 
 func parseFlags(flags *flag.FlagSet, args []string) error {
-	if err := flags.Parse(args); err != nil {
-		return err
+	return flags.Parse(args)
+}
+
+// nonEmpty is a string flag that rejects an empty value.
+type nonEmpty struct {
+	value *string
+	name  string
+}
+
+func (n nonEmpty) String() string {
+	if n.value == nil {
+		return ""
 	}
-	var err error
-	flags.Visit(func(option *flag.Flag) {
-		if (option.Name == "server" || option.Name == "S") && option.Value.String() == "" {
-			err = errors.New("--server requires a non-empty host label or address")
-		}
-		if (option.Name == "client" || option.Name == "C") && option.Value.String() == "" {
-			err = errors.New("--client requires a non-empty app label or ID")
-		}
-	})
-	return err
+	return *n.value
+}
+
+func (n nonEmpty) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("requires a non-empty %s", n.name)
+	}
+	*n.value = value
+	return nil
 }
