@@ -16,7 +16,7 @@ const (
 	SplitDown  = "down"
 )
 
-// Layout places a window's or pane's terminals. A layout without split is one
+// Layout places a tab's or pane's terminals. A layout without split is one
 // terminal. A layout with split divides its space between exactly two child
 // panes; ratio is the share given to the first.
 type Layout struct {
@@ -32,23 +32,67 @@ type Pane struct {
 	Layout `yaml:",inline"`
 }
 
-type Window struct {
+// Tab is one Rex window in a session.
+type Tab struct {
 	Label  string `yaml:"label"`
 	Layout `yaml:",inline"`
 }
 
-type Config struct {
-	Root        string   `yaml:"root"`
+type Hooks struct {
 	BeforeStart []string `yaml:"before_start,omitempty"`
 	AfterStart  []string `yaml:"after_start,omitempty"`
 	BeforeStop  []string `yaml:"before_stop,omitempty"`
 	AfterStop   []string `yaml:"after_stop,omitempty"`
-	Windows     []Window `yaml:"windows"`
 }
 
-// HasHooks reports whether any lifecycle hook is configured.
+func (h Hooks) any() bool {
+	return len(h.BeforeStart)+len(h.AfterStart)+len(h.BeforeStop)+len(h.AfterStop) > 0
+}
+
+// Session is one Rex session in a project. Its label is the Rex session label.
+type Session struct {
+	Label string `yaml:"label"`
+	Root  string `yaml:"root,omitempty"`
+	Hooks `yaml:",inline"`
+	Tabs  []Tab `yaml:"tabs"`
+}
+
+type Config struct {
+	Root     string `yaml:"root"`
+	Hooks    `yaml:",inline"`
+	Sessions []Session `yaml:"sessions"`
+}
+
+// HasHooks reports whether any project or session lifecycle hook is configured.
 func (c Config) HasHooks() bool {
-	return len(c.BeforeStart)+len(c.AfterStart)+len(c.BeforeStop)+len(c.AfterStop) > 0
+	if c.Hooks.any() {
+		return true
+	}
+	for _, session := range c.Sessions {
+		if session.Hooks.any() {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidName reports whether name can be used as a project or session name: 1
+// to 64 ASCII letters, digits, '.', '_', or '-', and not "." or "..".
+func ValidName(name string) bool {
+	if name == "" || len(name) > 64 || name == "." || name == ".." {
+		return false
+	}
+	for _, character := range name {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '.', character == '_', character == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Load reads and validates a project config. Local configs expand ~ and resolve
@@ -98,26 +142,41 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Root) == "" {
 		problems = append(problems, "root is required")
 	}
-	validateCommands(&problems, "before_start", c.BeforeStart)
-	validateCommands(&problems, "after_start", c.AfterStart)
-	validateCommands(&problems, "before_stop", c.BeforeStop)
-	validateCommands(&problems, "after_stop", c.AfterStop)
-	if len(c.Windows) == 0 {
-		problems = append(problems, "windows must contain at least one window")
+	validateHooks(&problems, "", c.Hooks)
+	if len(c.Sessions) == 0 {
+		problems = append(problems, "sessions must contain at least one session")
 	}
 
-	labels := make(map[string]struct{}, len(c.Windows))
-	for wi, window := range c.Windows {
-		windowPath := fmt.Sprintf("windows[%d]", wi)
-		label := strings.TrimSpace(window.Label)
-		if label == "" {
-			problems = append(problems, windowPath+".label is required")
-		} else if _, exists := labels[label]; exists {
-			problems = append(problems, windowPath+".label must be unique")
+	sessionLabels := make(map[string]struct{}, len(c.Sessions))
+	for si, session := range c.Sessions {
+		sessionPath := fmt.Sprintf("sessions[%d]", si)
+		if session.Label == "" {
+			problems = append(problems, sessionPath+".label is required")
+		} else if !ValidName(session.Label) {
+			problems = append(problems, sessionPath+".label must be 1 to 64 ASCII letters, digits, '.', '_', or '-'")
+		} else if _, exists := sessionLabels[session.Label]; exists {
+			problems = append(problems, sessionPath+".label must be unique")
 		} else {
-			labels[label] = struct{}{}
+			sessionLabels[session.Label] = struct{}{}
 		}
-		validatePane(&problems, windowPath, Pane{Layout: window.Layout})
+		validateHooks(&problems, sessionPath+".", session.Hooks)
+		if len(session.Tabs) == 0 {
+			problems = append(problems, sessionPath+".tabs must contain at least one tab")
+		}
+
+		tabLabels := make(map[string]struct{}, len(session.Tabs))
+		for ti, tab := range session.Tabs {
+			tabPath := fmt.Sprintf("%s.tabs[%d]", sessionPath, ti)
+			label := strings.TrimSpace(tab.Label)
+			if label == "" {
+				problems = append(problems, tabPath+".label is required")
+			} else if _, exists := tabLabels[label]; exists {
+				problems = append(problems, tabPath+".label must be unique")
+			} else {
+				tabLabels[label] = struct{}{}
+			}
+			validatePane(&problems, tabPath, Pane{Layout: tab.Layout})
+		}
 	}
 
 	if len(problems) > 0 {
@@ -159,6 +218,13 @@ func validatePane(problems *[]string, path string, pane Pane) {
 	}
 }
 
+func validateHooks(problems *[]string, prefix string, hooks Hooks) {
+	validateCommands(problems, prefix+"before_start", hooks.BeforeStart)
+	validateCommands(problems, prefix+"after_start", hooks.AfterStart)
+	validateCommands(problems, prefix+"before_stop", hooks.BeforeStop)
+	validateCommands(problems, prefix+"after_stop", hooks.AfterStop)
+}
+
 func validateCommands(problems *[]string, path string, commands []string) {
 	for i, command := range commands {
 		if strings.TrimSpace(command) == "" {
@@ -177,10 +243,19 @@ func (c *Config) resolvePaths(resolver pathResolver, configDir string) error {
 	}
 	c.Root = root
 
-	for wi := range c.Windows {
-		path := fmt.Sprintf("windows[%d]", wi)
-		if err := resolveLayout(resolver, c.Root, &c.Windows[wi].Layout, path); err != nil {
-			return err
+	for si := range c.Sessions {
+		session := &c.Sessions[si]
+		sessionPath := fmt.Sprintf("sessions[%d]", si)
+		root, err := resolver.resolve(c.Root, session.Root)
+		if err != nil {
+			return fmt.Errorf("%s.root: %w", sessionPath, err)
+		}
+		session.Root = root
+		for ti := range session.Tabs {
+			path := fmt.Sprintf("%s.tabs[%d]", sessionPath, ti)
+			if err := resolveLayout(resolver, session.Root, &session.Tabs[ti].Layout, path); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
