@@ -175,7 +175,7 @@ func (a App) loadProjects(names []string) ([]project, error) {
 	projects := make([]project, 0, len(names))
 	var invalid []string
 	for _, name := range names {
-		if !validProjectName(name) {
+		if !config.ValidName(name) {
 			invalid = append(invalid, fmt.Sprintf("%s (invalid project name)", name))
 			continue
 		}
@@ -194,23 +194,6 @@ func (a App) loadProjects(names []string) ([]project, error) {
 		return nil, fmt.Errorf("invalid projects: %s", strings.Join(invalid, ", "))
 	}
 	return projects, nil
-}
-
-func validProjectName(name string) bool {
-	if name == "" || len(name) > 64 || name == "." || name == ".." {
-		return false
-	}
-	for _, character := range name {
-		switch {
-		case character >= 'a' && character <= 'z',
-			character >= 'A' && character <= 'Z',
-			character >= '0' && character <= '9',
-			character == '.', character == '_', character == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func projectsDirectory() (string, error) {

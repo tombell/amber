@@ -14,9 +14,9 @@ import (
 )
 
 type fakeRex struct {
-	events   *[]string
-	sessions []rex.Session
-	windows  int
+	events     *[]string
+	sessions   []rex.Session
+	failCreate string
 }
 
 func (f *fakeRex) FindSession(_ context.Context, label string) (rex.Session, bool, error) {
@@ -31,7 +31,10 @@ func (f *fakeRex) FindSession(_ context.Context, label string) (rex.Session, boo
 
 func (f *fakeRex) CreateSession(_ context.Context, request rex.CreateSession) (rex.CreatedSession, error) {
 	*f.events = append(*f.events, fmt.Sprintf("create %s windows=%d", request.Label, len(request.Windows)))
-	created := rex.CreatedSession{ID: "session:new"}
+	if request.Label == f.failCreate {
+		return rex.CreatedSession{}, errors.New("create failed")
+	}
+	created := rex.CreatedSession{ID: "session:" + request.Label}
 	for i := range request.Windows {
 		created.Windows = append(created.Windows, struct {
 			ID string `json:"window_id"`
@@ -64,17 +67,32 @@ func (s fakeShell) Run(_ context.Context, project, sessionID, root, command stri
 }
 
 func project() *config.Config {
+	hooks := func(prefix string) config.Hooks {
+		return config.Hooks{
+			BeforeStart: []string{prefix + " before start"},
+			AfterStart:  []string{prefix + " after start"},
+			BeforeStop:  []string{prefix + " before stop"},
+			AfterStop:   []string{prefix + " after stop"},
+		}
+	}
 	return &config.Config{
-		Root:        "/project",
-		BeforeStart: []string{"before start"},
-		AfterStart:  []string{"after start"},
-		BeforeStop:  []string{"before stop"},
-		AfterStop:   []string{"after stop"},
-		Windows:     []config.Window{{Label: "server"}, {Label: "editor"}},
+		Root:  "/project",
+		Hooks: hooks("project"),
+		Sessions: []config.Session{
+			{Label: "api", Root: "/project/api", Hooks: hooks("api"), Tabs: []config.Tab{{Label: "server"}, {Label: "editor"}}},
+			{Label: "web", Root: "/project/web", Hooks: hooks("web"), Tabs: []config.Tab{{Label: "editor"}}},
+		},
 	}
 }
 
-func TestStartRunsHooksAroundOneCreateAndFocusesFirstWindow(t *testing.T) {
+func assertEvents(t *testing.T, events, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(events, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestStartCreatesEachSessionThenRunsAfterStartHooks(t *testing.T) {
 	var events []string
 	manager := New(&fakeRex{events: &events}, fakeShell{events: &events})
 
@@ -82,82 +100,109 @@ func TestStartRunsHooksAroundOneCreateAndFocusesFirstWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if id != "session:new" {
-		t.Errorf("Start() id = %q", id)
+	if id != "session:api" {
+		t.Errorf("Start() id = %q, want first session", id)
 	}
-	want := []string{
-		"find demo",
-		`hook /project session="" before start`,
-		"create demo windows=2",
-		"focus session:new window:1",
-		`hook /project session="session:new" after start`,
-	}
-	if !reflect.DeepEqual(events, want) {
-		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(events, "\n"), strings.Join(want, "\n"))
-	}
+	assertEvents(t, events, []string{
+		"find api",
+		"find web",
+		`hook /project session="" project before start`,
+		`hook /project/api session="" api before start`,
+		"create api windows=2",
+		"focus session:api window:1",
+		`hook /project/web session="" web before start`,
+		"create web windows=1",
+		`hook /project/api session="session:api" api after start`,
+		`hook /project/web session="session:web" web after start`,
+		`hook /project session="" project after start`,
+	})
 }
 
-func TestStartLeavesExistingSessionAlone(t *testing.T) {
+func TestStartOnlyCreatesMissingSessions(t *testing.T) {
 	var events []string
-	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:old", Label: "demo"}}}
+	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:old", Label: "api"}}}
 	manager := New(client, fakeShell{events: &events})
 
 	id, err := manager.Start(context.Background(), "demo", project())
 	if err != nil || id != "session:old" {
 		t.Fatalf("Start() = %q, %v", id, err)
 	}
-	if want := []string{"find demo"}; !reflect.DeepEqual(events, want) {
-		t.Fatalf("events = %q, want %q", events, want)
+	if slices.Contains(events, "create api windows=2") || !slices.Contains(events, "create web windows=1") {
+		t.Fatalf("events = %q", events)
 	}
 }
 
-func TestStartDoesNotCreateSessionWhenBeforeStartFails(t *testing.T) {
+func TestStartLeavesRunningProjectAlone(t *testing.T) {
 	var events []string
-	manager := New(&fakeRex{events: &events}, fakeShell{events: &events, fail: "before start"})
+	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:1", Label: "api"}, {ID: "session:2", Label: "web"}}}
+	manager := New(client, fakeShell{events: &events})
 
-	if _, err := manager.Start(context.Background(), "demo", project()); err == nil {
-		t.Fatal("Start() error = nil")
+	id, err := manager.Start(context.Background(), "demo", project())
+	if err != nil || id != "session:1" {
+		t.Fatalf("Start() = %q, %v", id, err)
 	}
-	if slices.ContainsFunc(events, func(event string) bool { return strings.HasPrefix(event, "create") }) {
-		t.Fatalf("session created after failed hook: %q", events)
+	assertEvents(t, events, []string{"find api", "find web"})
+}
+
+func TestStartKillsCreatedSessionsWhenALaterSessionFails(t *testing.T) {
+	for name, fail := range map[string]struct{ hook, create string }{
+		"before_start hook": {hook: "web before start"},
+		"create":            {create: "web"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var events []string
+			manager := New(&fakeRex{events: &events, failCreate: fail.create}, fakeShell{events: &events, fail: fail.hook})
+
+			if _, err := manager.Start(context.Background(), "demo", project()); err == nil {
+				t.Fatal("Start() error = nil")
+			}
+			if !slices.Contains(events, "kill session:api") {
+				t.Errorf("created session not killed: %q", events)
+			}
+			if slices.ContainsFunc(events, func(event string) bool { return strings.Contains(event, "after start") }) {
+				t.Errorf("after_start hook ran after failure: %q", events)
+			}
+		})
 	}
 }
 
-func TestStopKeepsSessionWhenBeforeStopFails(t *testing.T) {
+func TestStopRunsHooksAroundEachRunningSession(t *testing.T) {
 	var events []string
-	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:old", Label: "demo"}}}
-	manager := New(client, fakeShell{events: &events, fail: "before stop"})
-
-	if err := manager.Stop(context.Background(), "demo", project()); err == nil {
-		t.Fatal("Stop() error = nil")
-	}
-	if slices.Contains(events, "kill session:old") {
-		t.Fatalf("session killed after failed hook: %q", events)
-	}
-}
-
-func TestStopRunsHooksAroundKill(t *testing.T) {
-	var events []string
-	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:old", Label: "demo"}}}
+	client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:web", Label: "web"}}}
 	manager := New(client, fakeShell{events: &events})
 
 	if err := manager.Stop(context.Background(), "demo", project()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	want := []string{
-		"find demo",
-		`hook /project session="session:old" before stop`,
-		"kill session:old",
-		`hook /project session="" after stop`,
-	}
-	if !reflect.DeepEqual(events, want) {
-		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(events, "\n"), strings.Join(want, "\n"))
+	assertEvents(t, events, []string{
+		"find api",
+		"find web",
+		`hook /project session="" project before stop`,
+		`hook /project/web session="session:web" web before stop`,
+		"kill session:web",
+		`hook /project/web session="" web after stop`,
+		`hook /project session="" project after stop`,
+	})
+}
+
+func TestStopKeepsSessionsWhenBeforeStopFails(t *testing.T) {
+	for _, hook := range []string{"project before stop", "api before stop"} {
+		var events []string
+		client := &fakeRex{events: &events, sessions: []rex.Session{{ID: "session:api", Label: "api"}}}
+		manager := New(client, fakeShell{events: &events, fail: hook})
+
+		if err := manager.Stop(context.Background(), "demo", project()); err == nil {
+			t.Fatalf("Stop() with failing %q error = nil", hook)
+		}
+		if slices.Contains(events, "kill session:api") {
+			t.Fatalf("session killed after failed %q: %q", hook, events)
+		}
 	}
 }
 
 func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 	ratio := 0.6
-	cfg := &config.Config{Windows: []config.Window{{
+	session := config.Session{Label: "demo", Tabs: []config.Tab{{
 		Label: "server",
 		Layout: config.Layout{
 			Split: config.SplitRight,
@@ -172,7 +217,7 @@ func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 		},
 	}}}
 
-	layout := Layout("demo", cfg).Windows[0].Layout
+	layout := Layout(session).Windows[0].Layout
 	if layout.Split == nil || layout.Split.Direction != rex.DirectionHorizontal || *layout.Split.Ratio != 0.6 {
 		t.Fatalf("root split = %+v", layout.Split)
 	}
@@ -190,12 +235,12 @@ func TestLayoutMapsSplitsAndCommands(t *testing.T) {
 }
 
 func TestLayoutChangesIntoHomePathsFromTheShell(t *testing.T) {
-	cfg := &config.Config{Windows: []config.Window{
+	session := config.Session{Label: "demo", Tabs: []config.Tab{
 		{Label: "app", Layout: config.Layout{Root: "~/Code/it's here", Commands: []string{"make"}}},
 		{Label: "home", Layout: config.Layout{Root: "~"}},
 	}}
 
-	request := Layout("demo", cfg)
+	request := Layout(session)
 	app := request.Windows[0].Layout.Block.Options
 	if app.Cwd != "" || app.InitialInput != "cd ~/'Code/it'\\''s here'\nmake\n" {
 		t.Errorf("app options = %+v", app)

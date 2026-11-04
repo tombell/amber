@@ -119,13 +119,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if len(showFlags.Args()) != 1 {
-			return errors.New("usage: amber show <name>")
+			return errors.New("usage: amber show <session>")
 		}
 		return app.WithTarget(server, client).Show(showFlags.Arg(0))
 	case "start":
 		startFlags := subcommand("start")
 		var show bool
-		startFlags.BoolVar(&show, "show", false, "show the session after it starts")
+		startFlags.BoolVar(&show, "show", false, "show the project's first session after it starts")
 		if err := parseFlags(startFlags, remaining[1:]); err != nil {
 			return err
 		}

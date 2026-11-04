@@ -12,22 +12,28 @@ func TestLoadResolvesRootsThroughNestedSplits(t *testing.T) {
 	t.Setenv("HOME", home)
 	path := writeConfig(t, filepath.Join(home, ".config", "amber"), "demo.yml", `
 root: ~/Code/demo
-windows:
-  - label: server
-    root: cmd/server
-    split: right
-    ratio: 0.6
-    panes:
-      - commands: ["go run ."]
-      - root: ../..
-        split: down
+sessions:
+  - label: app
+    root: app
+    tabs:
+      - label: server
+        root: cmd/server
+        split: right
+        ratio: 0.6
         panes:
-          - label: tests
-            commands: ["go test ./..."]
-          - root: /var/log
-            commands: ["tail -f app.log"]
-  - label: editor
-    commands: ["nvim ."]
+          - commands: ["go run ."]
+          - root: ../..
+            split: down
+            panes:
+              - label: tests
+                commands: ["go test ./..."]
+              - root: /var/log
+                commands: ["tail -f app.log"]
+      - label: editor
+        commands: ["nvim ."]
+  - label: docs
+    tabs:
+      - label: shell
 `)
 
 	cfg, err := Load(path, true)
@@ -36,25 +42,32 @@ windows:
 	}
 
 	project := filepath.Join(home, "Code", "demo")
-	server := cfg.Windows[0]
+	app := filepath.Join(project, "app")
+	server := cfg.Sessions[0].Tabs[0]
 	nested := server.Panes[1]
 	roots := map[string]string{
 		"project":      cfg.Root,
-		"window":       server.Root,
+		"app session":  cfg.Sessions[0].Root,
+		"tab":          server.Root,
 		"first pane":   server.Panes[0].Root,
 		"nested split": nested.Root,
 		"tests pane":   nested.Panes[0].Root,
 		"logs pane":    nested.Panes[1].Root,
-		"editor":       cfg.Windows[1].Root,
+		"editor":       cfg.Sessions[0].Tabs[1].Root,
+		"docs session": cfg.Sessions[1].Root,
+		"docs tab":     cfg.Sessions[1].Tabs[0].Root,
 	}
 	want := map[string]string{
 		"project":      project,
-		"window":       filepath.Join(project, "cmd", "server"),
-		"first pane":   filepath.Join(project, "cmd", "server"),
-		"nested split": project,
-		"tests pane":   project,
+		"app session":  app,
+		"tab":          filepath.Join(app, "cmd", "server"),
+		"first pane":   filepath.Join(app, "cmd", "server"),
+		"nested split": app,
+		"tests pane":   app,
 		"logs pane":    "/var/log",
-		"editor":       project,
+		"editor":       app,
+		"docs session": project,
+		"docs tab":     project,
 	}
 	for name, got := range roots {
 		if got != want[name] {
@@ -67,13 +80,17 @@ func TestValidateReportsLayoutProblems(t *testing.T) {
 	ratio := 1.5
 	cfg := Config{
 		Root: "/project",
-		Windows: []Window{
-			{Label: "a", Layout: Layout{Split: "left", Ratio: &ratio, Commands: []string{"x"}, Panes: []Pane{{}}}},
-			{Label: "a", Layout: Layout{Panes: []Pane{{}, {}}}},
-			{Label: "b", Layout: Layout{Split: "down", Panes: []Pane{
-				{Layout: Layout{Commands: []string{" "}}},
-				{Label: "x", Layout: Layout{Split: "right", Panes: []Pane{{}, {}}}},
-			}}},
+		Sessions: []Session{
+			{Label: "s", Tabs: []Tab{
+				{Label: "a", Layout: Layout{Split: "left", Ratio: &ratio, Commands: []string{"x"}, Panes: []Pane{{}}}},
+				{Label: "a", Layout: Layout{Panes: []Pane{{}, {}}}},
+				{Label: "b", Layout: Layout{Split: "down", Panes: []Pane{
+					{Layout: Layout{Commands: []string{" "}}},
+					{Label: "x", Layout: Layout{Split: "right", Panes: []Pane{{}, {}}}},
+				}}},
+			}},
+			{Label: "s", Hooks: Hooks{AfterStart: []string{""}}},
+			{Label: "a b", Tabs: []Tab{{Label: "a"}}},
 		},
 	}
 
@@ -82,14 +99,18 @@ func TestValidateReportsLayoutProblems(t *testing.T) {
 		t.Fatal("Validate() error = nil")
 	}
 	for _, problem := range []string{
-		"windows[0].split must be right or down",
-		"windows[0].ratio must be greater than 0 and less than 1",
-		"windows[0].commands cannot be used with split",
-		"windows[0].panes must contain exactly two panes",
-		"windows[1].label must be unique",
-		"windows[1].panes requires split",
-		"windows[2].panes[0].commands[0] must not be empty",
-		"windows[2].panes[1].label cannot be used with split",
+		"sessions[0].tabs[0].split must be right or down",
+		"sessions[0].tabs[0].ratio must be greater than 0 and less than 1",
+		"sessions[0].tabs[0].commands cannot be used with split",
+		"sessions[0].tabs[0].panes must contain exactly two panes",
+		"sessions[0].tabs[1].label must be unique",
+		"sessions[0].tabs[1].panes requires split",
+		"sessions[0].tabs[2].panes[0].commands[0] must not be empty",
+		"sessions[0].tabs[2].panes[1].label cannot be used with split",
+		"sessions[1].label must be unique",
+		"sessions[1].after_start[0] must not be empty",
+		"sessions[1].tabs must contain at least one tab",
+		"sessions[2].label must be 1 to 64 ASCII",
 	} {
 		if !strings.Contains(err.Error(), problem) {
 			t.Errorf("error %q does not contain %q", err, problem)
@@ -100,10 +121,11 @@ func TestValidateReportsLayoutProblems(t *testing.T) {
 func TestLoadForServerRejectsLocalOnlyPaths(t *testing.T) {
 	dir := t.TempDir()
 	tests := map[string]string{
-		"relative project root": "root: Code/demo\nwindows: [{label: a}]\n",
-		"other user's home":     "root: ~alice/demo\nwindows: [{label: a}]\n",
-		"climbs out of home":    "root: ~/demo\nwindows: [{label: a, root: ../..}]\n",
-		"backslash":             "root: '~/a\\b'\nwindows: [{label: a}]\n",
+		"relative project root": "root: Code/demo\nsessions: [{label: s, tabs: [{label: a}]}]\n",
+		"other user's home":     "root: ~alice/demo\nsessions: [{label: s, tabs: [{label: a}]}]\n",
+		"climbs out of home":    "root: ~/demo\nsessions: [{label: s, tabs: [{label: a, root: ../..}]}]\n",
+		"session climbs out":    "root: ~/demo\nsessions: [{label: s, root: ../.., tabs: [{label: a}]}]\n",
+		"backslash":             "root: '~/a\\b'\nsessions: [{label: s, tabs: [{label: a}]}]\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -118,30 +140,33 @@ func TestLoadForServerRejectsLocalOnlyPaths(t *testing.T) {
 func TestLoadForServerKeepsHomePathsForTheServer(t *testing.T) {
 	path := writeConfig(t, t.TempDir(), "demo.yml", `
 root: ~/Code/demo
-windows:
-  - label: app
-    root: cmd/../app
-    split: right
-    panes:
-      - root: ..
-      - root: /var/log
-  - label: home
-    root: ~/
-  - label: srv
-    root: /srv/demo
+sessions:
+  - label: demo
+    tabs:
+      - label: app
+        root: cmd/../app
+        split: right
+        panes:
+          - root: ..
+          - root: /var/log
+      - label: home
+        root: ~/
+      - label: srv
+        root: /srv/demo
 `)
 
 	cfg, err := Load(path, false)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	tabs := cfg.Sessions[0].Tabs
 	roots := map[string]string{
 		"project":   cfg.Root,
-		"app":       cfg.Windows[0].Root,
-		"up pane":   cfg.Windows[0].Panes[0].Root,
-		"logs pane": cfg.Windows[0].Panes[1].Root,
-		"home":      cfg.Windows[1].Root,
-		"srv":       cfg.Windows[2].Root,
+		"app":       tabs[0].Root,
+		"up pane":   tabs[0].Panes[0].Root,
+		"logs pane": tabs[0].Panes[1].Root,
+		"home":      tabs[1].Root,
+		"srv":       tabs[2].Root,
 	}
 	want := map[string]string{
 		"project":   "~/Code/demo",
@@ -159,9 +184,9 @@ windows:
 }
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
-	path := writeConfig(t, t.TempDir(), "demo.yml", "root: /demo\nworkspaces: []\nwindows: [{label: a}]\n")
-	if _, err := Load(path, true); err == nil || !strings.Contains(err.Error(), "workspaces") {
-		t.Fatalf("Load() error = %v, want unknown field workspaces", err)
+	path := writeConfig(t, t.TempDir(), "demo.yml", "root: /demo\nwindows: [{label: a}]\n")
+	if _, err := Load(path, true); err == nil || !strings.Contains(err.Error(), "windows") {
+		t.Fatalf("Load() error = %v, want unknown field windows", err)
 	}
 }
 
